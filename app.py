@@ -45,10 +45,6 @@ st.sidebar.subheader("Security Deposit")
 security_deposit = st.sidebar.number_input("Security Deposit Amount", min_value=0.0, value=0.0)
 sd_discount_rate_input = st.sidebar.number_input("SD Discount Rate (%)", min_value=0.0, value=8.0)
 
-# Refund timing
-refund_after_lockin = st.sidebar.checkbox("Refundable after Lock-in?")
-lock_in_years = st.sidebar.number_input("Lock-in Period (Years)", min_value=0, max_value=int(lease_term), value=4)
-
 generate = st.sidebar.button("Generate Lease Model")
 
 # =====================================================
@@ -66,7 +62,7 @@ if generate:
         discount_rate = discount_rate_input / 100
 
     # =====================
-    # PRESENT VALUE
+    # LEASE LIABILITY PV
     # =====================
 
     if discount_rate == 0:
@@ -88,12 +84,12 @@ if generate:
     lease_schedule = []
     journal_entries = []
 
-    # Initial entry
+    # Initial Recognition
     journal_entries.append({"Period": 0, "Account": "ROU Asset", "Debit": present_value, "Credit": 0})
     journal_entries.append({"Period": 0, "Account": "Lease Liability", "Debit": 0, "Credit": present_value})
 
     # =====================
-    # LEASE SCHEDULE
+    # LEASE AMORTISATION
     # =====================
 
     for period in range(1, int(periods) + 1):
@@ -111,8 +107,8 @@ if generate:
         lease_schedule.append({
             "Period": period,
             "Opening Liability": opening_liability,
-            "Interest": interest,
-            "Payment": lease_payment,
+            "Interest Expense": interest,
+            "Lease Payment": lease_payment,
             "Closing Liability": closing_liability,
             "Opening ROU": opening_rou,
             "Depreciation": depreciation,
@@ -125,7 +121,7 @@ if generate:
             {"Period": period, "Account": "Lease Liability", "Debit": lease_payment, "Credit": 0},
             {"Period": period, "Account": "Bank", "Debit": 0, "Credit": lease_payment},
             {"Period": period, "Account": "Depreciation Expense", "Debit": depreciation, "Credit": 0},
-            {"Period": period, "Account": "Accumulated Depreciation", "Debit": 0, "Credit": depreciation}
+            {"Period": period, "Account": "Accumulated Depreciation - ROU", "Debit": 0, "Credit": depreciation}
         ])
 
         opening_liability = closing_liability
@@ -134,7 +130,7 @@ if generate:
     df_schedule = pd.DataFrame(lease_schedule)
 
     # =====================================================
-    # SECURITY DEPOSIT
+    # SECURITY DEPOSIT (Discounted over Lease Term)
     # =====================================================
 
     sd_df = pd.DataFrame()
@@ -143,15 +139,10 @@ if generate:
 
         sd_rate = sd_discount_rate_input / 100
 
-        # Decide amortisation period
-        if refund_after_lockin:
-            sd_term = lock_in_years
-        else:
-            sd_term = lease_term
+        pv_sd = round(security_deposit / ((1 + sd_rate) ** lease_term), 2)
+        sd_diff = round(security_deposit - pv_sd, 2)
 
-        pv_sd = round(security_deposit / ((1 + sd_rate) ** sd_term), 2)
-        sd_diff = security_deposit - pv_sd
-
+        # Initial Recognition
         journal_entries.append({"Period": 0, "Account": "Security Deposit (Financial Asset)", "Debit": pv_sd, "Credit": 0})
         journal_entries.append({"Period": 0, "Account": "ROU Asset", "Debit": sd_diff, "Credit": 0})
         journal_entries.append({"Period": 0, "Account": "Bank", "Debit": 0, "Credit": security_deposit})
@@ -159,7 +150,7 @@ if generate:
         opening_balance = pv_sd
         sd_schedule = []
 
-        for year in range(1, sd_term + 1):
+        for year in range(1, lease_term + 1):
             interest_income = round(opening_balance * sd_rate, 2)
             closing_balance = round(opening_balance + interest_income, 2)
 
