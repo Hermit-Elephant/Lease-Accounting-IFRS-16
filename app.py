@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from io import BytesIO
 
 # =====================================================
@@ -13,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("📘 IFRS 16 Lease Accounting Tool")
-st.markdown("Lease Schedule • Security Deposit • Journal Entries")
+st.markdown("Lease Schedule • Escalation • Security Deposit • Journal Entries")
 st.divider()
 
 # =====================================================
@@ -22,18 +23,32 @@ st.divider()
 
 st.sidebar.header("Lease Inputs")
 
-lease_payment = st.sidebar.number_input("Lease Payment", min_value=0.0, value=50000.0)
-discount_rate_input = st.sidebar.number_input("Discount Rate (%)", min_value=0.0, value=9.0)
+base_rent = st.sidebar.number_input("Base Lease Payment", min_value=0.0, value=100000.0)
+discount_rate_input = st.sidebar.number_input("Discount Rate (%)", min_value=0.0, value=8.0)
 lease_term = st.sidebar.number_input("Lease Term (Years)", min_value=1, value=8)
-
-payment_frequency = st.sidebar.selectbox(
-    "Payment Frequency",
-    ["Annual", "Monthly"]
-)
 
 payment_timing = st.sidebar.selectbox(
     "Payment Timing",
     ["End of Period", "Beginning of Period"]
+)
+
+# =====================================================
+# ESCALATION INPUTS
+# =====================================================
+
+st.sidebar.subheader("Rent Escalation")
+
+escalation_rate = st.sidebar.number_input("Escalation (%)", min_value=0.0, value=5.0)
+escalation_frequency = st.sidebar.selectbox(
+    "Escalation Frequency",
+    ["Every Year", "Every 2 Years", "Every 3 Years"]
+)
+
+escalation_start = st.sidebar.number_input(
+    "Escalation Starts After (Years)",
+    min_value=0,
+    max_value=int(lease_term),
+    value=1
 )
 
 # =====================================================
@@ -53,30 +68,49 @@ generate = st.sidebar.button("Generate Lease Model")
 
 if generate:
 
-    # Frequency setup
-    if payment_frequency == "Monthly":
-        periods = lease_term * 12
-        discount_rate = discount_rate_input / 100 / 12
+    discount_rate = discount_rate_input / 100
+    escalation_rate = escalation_rate / 100
+
+    # Determine escalation interval
+    if escalation_frequency == "Every Year":
+        interval = 1
+    elif escalation_frequency == "Every 2 Years":
+        interval = 2
     else:
-        periods = lease_term
-        discount_rate = discount_rate_input / 100
+        interval = 3
 
-    # =====================
-    # LEASE LIABILITY PV
-    # =====================
+    # =====================================================
+    # BUILD ESCALATED RENT SCHEDULE
+    # =====================================================
 
-    if discount_rate == 0:
-        present_value = lease_payment * periods
-    else:
-        pv_factor = (1 - (1 + discount_rate) ** (-periods)) / discount_rate
+    rents = []
+    current_rent = base_rent
 
+    for year in range(1, int(lease_term) + 1):
+
+        if year > escalation_start and (year - escalation_start - 1) % interval == 0:
+            current_rent *= (1 + escalation_rate)
+
+        rents.append(round(current_rent, 2))
+
+    # =====================================================
+    # CALCULATE PRESENT VALUE
+    # =====================================================
+
+    pv = 0
+
+    for year in range(1, lease_term + 1):
         if payment_timing == "Beginning of Period":
-            pv_factor *= (1 + discount_rate)
+            pv += rents[year - 1] / ((1 + discount_rate) ** (year - 1))
+        else:
+            pv += rents[year - 1] / ((1 + discount_rate) ** year)
 
-        present_value = lease_payment * pv_factor
+    present_value = round(pv, 2)
+    depreciation = round(present_value / lease_term, 2)
 
-    present_value = round(present_value, 2)
-    depreciation = round(present_value / periods, 2)
+    # =====================================================
+    # LEASE AMORTISATION
+    # =====================================================
 
     opening_liability = present_value
     opening_rou = present_value
@@ -85,43 +119,40 @@ if generate:
     journal_entries = []
 
     # Initial Recognition
-    journal_entries.append({"Period": 0, "Account": "ROU Asset", "Debit": present_value, "Credit": 0})
-    journal_entries.append({"Period": 0, "Account": "Lease Liability", "Debit": 0, "Credit": present_value})
+    journal_entries.append({"Year": 0, "Account": "ROU Asset", "Debit": present_value, "Credit": 0})
+    journal_entries.append({"Year": 0, "Account": "Lease Liability", "Debit": 0, "Credit": present_value})
 
-    # =====================
-    # LEASE AMORTISATION
-    # =====================
+    for year in range(1, lease_term + 1):
 
-    for period in range(1, int(periods) + 1):
+        rent = rents[year - 1]
 
         if payment_timing == "Beginning of Period":
-            opening_liability -= lease_payment
+            opening_liability -= rent
             interest = round(opening_liability * discount_rate, 2)
             closing_liability = round(opening_liability + interest, 2)
         else:
             interest = round(opening_liability * discount_rate, 2)
-            closing_liability = round(opening_liability + interest - lease_payment, 2)
+            closing_liability = round(opening_liability + interest - rent, 2)
 
         closing_rou = round(opening_rou - depreciation, 2)
 
         lease_schedule.append({
-            "Period": period,
+            "Year": year,
             "Opening Liability": opening_liability,
+            "Rent Payment": rent,
             "Interest Expense": interest,
-            "Lease Payment": lease_payment,
             "Closing Liability": closing_liability,
             "Opening ROU": opening_rou,
             "Depreciation": depreciation,
             "Closing ROU": closing_rou
         })
 
-        # Journals
         journal_entries.extend([
-            {"Period": period, "Account": "Interest Expense", "Debit": interest, "Credit": 0},
-            {"Period": period, "Account": "Lease Liability", "Debit": lease_payment, "Credit": 0},
-            {"Period": period, "Account": "Bank", "Debit": 0, "Credit": lease_payment},
-            {"Period": period, "Account": "Depreciation Expense", "Debit": depreciation, "Credit": 0},
-            {"Period": period, "Account": "Accumulated Depreciation - ROU", "Debit": 0, "Credit": depreciation}
+            {"Year": year, "Account": "Interest Expense", "Debit": interest, "Credit": 0},
+            {"Year": year, "Account": "Lease Liability", "Debit": rent, "Credit": 0},
+            {"Year": year, "Account": "Bank", "Debit": 0, "Credit": rent},
+            {"Year": year, "Account": "Depreciation Expense", "Debit": depreciation, "Credit": 0},
+            {"Year": year, "Account": "Accumulated Depreciation - ROU", "Debit": 0, "Credit": depreciation}
         ])
 
         opening_liability = closing_liability
@@ -130,7 +161,7 @@ if generate:
     df_schedule = pd.DataFrame(lease_schedule)
 
     # =====================================================
-    # SECURITY DEPOSIT (Discounted over Lease Term)
+    # SECURITY DEPOSIT
     # =====================================================
 
     sd_df = pd.DataFrame()
@@ -138,14 +169,12 @@ if generate:
     if security_deposit > 0:
 
         sd_rate = sd_discount_rate_input / 100
-
         pv_sd = round(security_deposit / ((1 + sd_rate) ** lease_term), 2)
-        sd_diff = round(security_deposit - pv_sd, 2)
+        sd_diff = security_deposit - pv_sd
 
-        # Initial Recognition
-        journal_entries.append({"Period": 0, "Account": "Security Deposit (Financial Asset)", "Debit": pv_sd, "Credit": 0})
-        journal_entries.append({"Period": 0, "Account": "ROU Asset", "Debit": sd_diff, "Credit": 0})
-        journal_entries.append({"Period": 0, "Account": "Bank", "Debit": 0, "Credit": security_deposit})
+        journal_entries.append({"Year": 0, "Account": "Security Deposit (Financial Asset)", "Debit": pv_sd, "Credit": 0})
+        journal_entries.append({"Year": 0, "Account": "ROU Asset", "Debit": sd_diff, "Credit": 0})
+        journal_entries.append({"Year": 0, "Account": "Bank", "Debit": 0, "Credit": security_deposit})
 
         opening_balance = pv_sd
         sd_schedule = []
@@ -161,8 +190,8 @@ if generate:
                 "Closing Balance": closing_balance
             })
 
-            journal_entries.append({"Period": year, "Account": "Security Deposit", "Debit": interest_income, "Credit": 0})
-            journal_entries.append({"Period": year, "Account": "Interest Income", "Debit": 0, "Credit": interest_income})
+            journal_entries.append({"Year": year, "Account": "Security Deposit", "Debit": interest_income, "Credit": 0})
+            journal_entries.append({"Year": year, "Account": "Interest Income", "Debit": 0, "Credit": interest_income})
 
             opening_balance = closing_balance
 
@@ -171,7 +200,7 @@ if generate:
     df_journals = pd.DataFrame(journal_entries)
 
     # =====================================================
-    # TABS
+    # DISPLAY
     # =====================================================
 
     tab1, tab2, tab3 = st.tabs([
@@ -187,7 +216,7 @@ if generate:
         if not sd_df.empty:
             st.dataframe(sd_df, use_container_width=True)
         else:
-            st.info("No Security Deposit entered.")
+            st.info("No Security Deposit Entered.")
 
     with tab3:
         st.dataframe(df_journals, use_container_width=True)
