@@ -21,36 +21,47 @@ st.set_page_config(
 dark_mode = st.sidebar.toggle("🌙 Enable Dark Mode")
 
 if dark_mode:
-    background_color = "#0E1117"
-    text_color = "white"
-    card_color = "#262730"
-    graph_bg = "#0E1117"
-    grid_color = "#444444"
+    st.markdown("""
+        <style>
+        .stApp {
+            background-color: #0E1117;
+            color: white;
+        }
+        section[data-testid="stSidebar"] {
+            background-color: #161B22;
+        }
+        div[data-testid="stDataFrame"] {
+            background-color: #1E2228;
+        }
+        .stButton>button {
+            background-color: #262730;
+            color: white;
+        }
+        .stDownloadButton>button {
+            background-color: #262730;
+            color: white;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 else:
-    background_color = "white"
-    text_color = "black"
-    card_color = "#F5F5F5"
-    graph_bg = "white"
-    grid_color = "#DDDDDD"
-
-st.markdown(f"""
-    <style>
-    .stApp {{
-        background-color: {background_color};
-        color: {text_color};
-    }}
-    div[data-testid="stDataFrame"] {{
-        background-color: {card_color};
-    }}
-    </style>
-""", unsafe_allow_html=True)
+    st.markdown("""
+        <style>
+        .stApp {
+            background-color: white;
+            color: black;
+        }
+        section[data-testid="stSidebar"] {
+            background-color: #F0F2F6;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
 # =====================================================
 # TITLE
 # =====================================================
 
 st.title("📘 IFRS 16 Lease Accounting Tool")
-st.markdown("Lease Schedule • Escalation • Journal Entries • Analytics Dashboard")
+st.markdown("Lease Schedule • Escalation • Analytics Dashboard")
 st.divider()
 
 # =====================================================
@@ -94,16 +105,7 @@ if generate:
     discount_rate = discount_rate_input / 100
     escalation_rate = escalation_rate_input / 100
 
-    if escalation_frequency == "Every Year":
-        interval = 1
-    elif escalation_frequency == "Every 2 Years":
-        interval = 2
-    else:
-        interval = 3
-
-    # -------------------------------------------------
-    # RENT BUILD
-    # -------------------------------------------------
+    interval = {"Every Year": 1, "Every 2 Years": 2, "Every 3 Years": 3}[escalation_frequency]
 
     rents = []
     current_rent = base_rent
@@ -111,15 +113,9 @@ if generate:
     for year in range(1, int(lease_term) + 1):
         if year > escalation_start and (year - escalation_start - 1) % interval == 0:
             current_rent *= (1 + escalation_rate)
-
         rents.append(round(current_rent, 2))
 
-    # -------------------------------------------------
-    # PRESENT VALUE
-    # -------------------------------------------------
-
     pv = 0
-
     for year in range(1, lease_term + 1):
         if payment_timing == "Beginning of Period":
             pv += rents[year - 1] / ((1 + discount_rate) ** (year - 1))
@@ -129,12 +125,7 @@ if generate:
     present_value = round(pv, 2)
     depreciation = round(present_value / lease_term, 2)
 
-    # -------------------------------------------------
-    # AMORTIZATION
-    # -------------------------------------------------
-
     opening_liability = present_value
-    opening_rou = present_value
     lease_schedule = []
 
     for year in range(1, lease_term + 1):
@@ -149,18 +140,14 @@ if generate:
             interest = round(opening_liability * discount_rate, 2)
             closing_liability = round(opening_liability + interest - rent, 2)
 
-        closing_rou = round(opening_rou - depreciation, 2)
-
         lease_schedule.append({
             "Year": year,
-            "Rent": rent,
             "Interest Expense": interest,
             "Depreciation": depreciation,
             "Closing Liability": closing_liability
         })
 
         opening_liability = closing_liability
-        opening_rou = closing_rou
 
     df_schedule = pd.DataFrame(lease_schedule)
 
@@ -168,22 +155,10 @@ if generate:
     # TABS
     # =====================================================
 
-    tab1, tab2, tab3 = st.tabs([
-        "📊 Lease Schedule",
-        "📈 Analytics",
-        "⬇ Export"
-    ])
-
-    # -------------------------------------------------
-    # TABLE
-    # -------------------------------------------------
+    tab1, tab2, tab3 = st.tabs(["📊 Schedule", "📈 Analytics", "⬇ Export"])
 
     with tab1:
         st.dataframe(df_schedule, use_container_width=True)
-
-    # -------------------------------------------------
-    # GRAPH
-    # -------------------------------------------------
 
     with tab2:
 
@@ -191,33 +166,29 @@ if generate:
 
         fig, ax = plt.subplots()
 
-        fig.patch.set_facecolor(graph_bg)
-        ax.set_facecolor(graph_bg)
+        if dark_mode:
+            fig.patch.set_facecolor("#0E1117")
+            ax.set_facecolor("#0E1117")
+            ax.tick_params(colors="white")
+            ax.xaxis.label.set_color("white")
+            ax.yaxis.label.set_color("white")
+            ax.title.set_color("white")
 
         ax.plot(df_schedule["Year"], df_schedule["Interest Expense"], marker='o')
         ax.plot(df_schedule["Year"], df_schedule["Depreciation"], marker='o')
 
-        ax.set_xlabel("Year", color=text_color)
-        ax.set_ylabel("Amount", color=text_color)
-        ax.set_title("Interest vs Depreciation Over Lease Term", color=text_color)
-
-        ax.tick_params(colors=text_color)
-        ax.grid(color=grid_color, linestyle='--', linewidth=0.5)
+        ax.set_xlabel("Year")
+        ax.set_ylabel("Amount")
+        ax.set_title("Interest vs Depreciation")
 
         ax.legend(["Interest Expense", "Depreciation"])
+        ax.grid(alpha=0.3)
 
         st.pyplot(fig)
-
-        st.info("📌 Interest reduces over time as liability declines. Depreciation remains constant (SLM).")
-
-    # -------------------------------------------------
-    # EXPORT
-    # -------------------------------------------------
 
     with tab3:
 
         output = BytesIO()
-
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_schedule.to_excel(writer, sheet_name='Lease Schedule', index=False)
 
